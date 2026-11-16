@@ -1,0 +1,9 @@
+{
+  "name": "Ojo Seco · Center Dr Eyes",
+  "short_name": "Ojo Seco",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f7fa",
+  "theme_color": "#f4f7fa",
+  "icons": [{ "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }]
+}
