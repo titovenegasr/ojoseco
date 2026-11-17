@@ -361,21 +361,70 @@ function thanks() {
 }
 
 /* ---------- Reporte (solo personal) ---------- */
-let curBlob = null, curName = '';
+let curBlob = null, curPdf = null, curName = '';
 async function reportScreen(id, backTo) {
   const v = DB.visits.find(x => x.id === id); if (!v) { home(); return; }
   show(`<button class="backlink" onclick="${backTo ? `patient('${v.pid}')` : 'home()'}">‹ ${backTo ? 'Paciente' : 'Inicio'}</button>
     <h1 style="font-size:32px">${esc(v.nombre)}</h1><p class="sub">${fDate(v.fecha, true)} · ${fTime(v.fecha)}</p>
-    <button class="btn ora" id="sh" disabled onclick="shareReport()">Enviar imagen al iPad (AirDrop)</button>
-    ${backTo ? '' : '<button class="btn" onclick="home()">Listo · siguiente paciente</button>'}
+    <div class="row"><button class="btn ora" id="shp" disabled onclick="sharePdf()">Enviar PDF<span class="hint">Se abre directo en GoodNotes</span></button>
+    <button class="btn" id="sh" disabled onclick="shareReport()">Enviar imagen<span class="hint">PNG · llega a Fotos</span></button></div>
+    ${backTo ? '' : '<button class="btn sec" onclick="home()">Listo · siguiente paciente</button>'}
     <div class="report" id="rep"><p class="sub">Preparando reporte…</p></div>`);
-  curBlob = null;
+  curBlob = curPdf = null;
   const canvas = await drawReport(v);
   curBlob = await new Promise(r => canvas.toBlob(r, 'image/png'));
-  curName = `Ojo seco - ${v.nombre.replace(/[\/\\:*?"<>|]/g, '')} - ${isoDay(v.fecha)}.png`;
+  curName = `Ojo seco - ${v.nombre.replace(/[\/\\:*?"<>|]/g, '')} - ${isoDay(v.fecha)}`;
   const rep = document.getElementById('rep'); if (!rep) return;
   rep.innerHTML = `<img alt="Reporte" src="${URL.createObjectURL(curBlob)}">`;
   document.getElementById('sh').disabled = false;
+  curPdf = await makePdf(canvas);
+  const b = document.getElementById('shp'); if (b) b.disabled = false;
+}
+
+/* ---------- PDF tamaño carta (sin librerías): cada página es una imagen JPEG ---------- */
+function pageCuts(canvas, pageH) {
+  // Corta en filas casi blancas para no partir texto ni tablas
+  const W = canvas.width, H = canvas.height, ctx = canvas.getContext('2d');
+  const data = ctx.getImageData(0, 0, W, H).data;
+  const blank = yy => { for (let xx = 0; xx < W; xx += 2) { const i = (yy * W + xx) * 4; if (data[i] < 236 || data[i + 1] < 236 || data[i + 2] < 236) return false; } return true; };
+  const cuts = [0]; let top = 0;
+  while (H - top > pageH) {
+    let cut = top + pageH;
+    const hint = (canvas.breaks || []).filter(b => b > top + pageH * 0.55 && b <= top + pageH).pop();
+    if (hint) { cuts.push(hint); top = hint; continue; }
+    for (let yy = cut; yy > top + pageH - 500; yy--) if (blank(yy)) { cut = yy; break; }
+    cuts.push(cut); top = cut;
+  }
+  cuts.push(H); return cuts;
+}
+async function makePdf(canvas) {
+  const W = canvas.width, PH = Math.round(W * 11 / 8.5), PAD = 70;   // carta 8,5 × 11 in
+  const cuts = pageCuts(canvas, PH - PAD), jpgs = [];
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const pg = document.createElement('canvas'); pg.width = W; pg.height = PH;
+    const g = pg.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, W, PH);
+    const y0 = i ? PAD : 0, h = cuts[i + 1] - cuts[i];
+    g.drawImage(canvas, 0, cuts[i], W, h, 0, y0, W, h);
+    if (cuts.length > 2) { g.font = '22px "Helvetica Neue", Helvetica, Arial, sans-serif'; g.fillStyle = '#8a96a0'; g.textAlign = 'right'; g.fillText(`Página ${i + 1} de ${cuts.length - 1}`, W - 100, PH - 40); }
+    const b = await new Promise(r => pg.toBlob(r, 'image/jpeg', 0.9));
+    jpgs.push(new Uint8Array(await b.arrayBuffer()));
+  }
+  const enc = new TextEncoder(), parts = [], offs = []; let len = 0;
+  const put = d => { const u = typeof d === 'string' ? enc.encode(d) : d; parts.push(u); len += u.length; };
+  const n = jpgs.length, obj = (k, body) => { offs[k] = len; put(`${k} 0 obj\n`); body(); put('\nendobj\n'); };
+  put('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  obj(1, () => put('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => put(`<< /Type /Pages /Count ${n} /Kids [${jpgs.map((_, i) => `${3 + i * 3} 0 R`).join(' ')}] >>`));
+  jpgs.forEach((j, i) => {
+    const pk = 3 + i * 3, ck = pk + 1, ik = pk + 2, cs = 'q 612 0 0 792 0 0 cm /Im0 Do Q';
+    obj(pk, () => put(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 ${ik} 0 R >> >> /Contents ${ck} 0 R >>`));
+    obj(ck, () => put(`<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`));
+    obj(ik, () => { put(`<< /Type /XObject /Subtype /Image /Width ${W} /Height ${PH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${j.length} >>\nstream\n`); put(j); put('\nendstream'); });
+  });
+  const total = 3 + n * 3, xref = len;
+  put(`xref\n0 ${total}\n0000000000 65535 f \n` + offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join(''));
+  put(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
 }
 async function shareFile(blob, name, type) {
   const file = new File([blob], name, { type });
@@ -385,7 +434,8 @@ async function shareFile(blob, name, type) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
   return true;
 }
-function shareReport() { if (curBlob) shareFile(curBlob, curName, 'image/png'); }
+function shareReport() { if (curBlob) shareFile(curBlob, curName + '.png', 'image/png'); }
+function sharePdf() { if (curPdf) shareFile(curPdf, curName + '.pdf', 'application/pdf'); }
 
 /* ---------- Pacientes ---------- */
 function patients(q) {
@@ -469,6 +519,7 @@ async function drawReport(v) {
   const pill = (t, X, Y, color, size) => { x.font = F(size || 30, 1); const w = x.measureText(t).width + 40, h = (size || 30) + 26; rrect(X, Y - h + 12, w, h, h / 2, color); text(t, X + 20, Y - 2, F(size || 30, 1), '#fff'); return w; };
 
   let y = 70;
+  const breaks = [];   // buenos lugares para cortar página (antes de cada sección)
   try { const logo = await loadImg('logo.png'); const lh = 130, lw = logo.width * lh / logo.height; x.drawImage(logo, M, y, lw, lh);
     text('Center Dr Eyes', M + lw + 30, y + 62, F(52, 1), BLUE); text('Dr. Tito Venegas · Oftalmólogo · Alajuela', M + lw + 30, y + 108, F(30), GRAY); } catch (e) {}
   text(fDate(v.fecha, true), W - M, y + 62, F(30), GRAY, 'right');
@@ -513,7 +564,7 @@ async function drawReport(v) {
   // Pruebas clínicas: casillas en blanco para anotar en GoodNotes
   const box = (X, Y, w, h) => { x.strokeStyle = '#9fb0bf'; x.lineWidth = 2; x.beginPath(); x.roundRect(X, Y, w, h, 10); x.fillStyle = '#fff'; x.fill(); x.stroke(); };
   y += 50;
-  text('Pruebas clínicas — completar en consulta', M, y, F(36, 1), BLUE); y += 26;
+  breaks.push(y - 60); text('Pruebas clínicas — completar en consulta', M, y, F(36, 1), BLUE); y += 26;
   const sc = [0.40, 0.26, 0.17, 0.17].map(f => f * CW);
   rrect(M, y, CW, 60, 10, '#e3ecf4');
   ['Prueba', 'Positivo si', 'OD', 'OI'].forEach((t, i) => text(t, M + 20 + sc.slice(0, i).reduce((a, b) => a + b, 0), y + 40, F(24, 1), GRAY));
@@ -534,7 +585,7 @@ async function drawReport(v) {
 
   // Tablas de respuestas
   const table = (title, rows) => {
-    text(title, M, y, F(36, 1), BLUE); y += 26;
+    breaks.push(y - 60); text(title, M, y, F(36, 1), BLUE); y += 26;
     const c0 = CW * 0.60, c1 = CW * 0.28;
     rrect(M, y, CW, 60, 10, '#e3ecf4');
     text('Pregunta', M + 20, y + 40, F(24, 1), GRAY); text('Respuesta', M + c0 + 20, y + 40, F(24, 1), GRAY); text('Puntos', W - M - 20, y + 40, F(24, 1), GRAY, 'right');
@@ -570,7 +621,7 @@ async function drawReport(v) {
   const hist = visitsOf(v.pid).filter(h => h.fecha <= v.fecha);
   const prev = hist.filter(h => h.id !== v.id);
   if (prev.length) {
-    x.fillStyle = ORANGE; x.fillRect(M, y - 20, CW, 4); y += 50;
+    breaks.push(y - 40); x.fillStyle = ORANGE; x.fillRect(M, y - 20, CW, 4); y += 50;
     text('Evolución del paciente', M, y, F(40, 1), BLUE); y += 30;
     const showDeq = hist.some(h => h.deq5), showOsdi = hist.some(h => h.osdi);
     // tabla
@@ -594,7 +645,7 @@ async function drawReport(v) {
     const chart = (name, pts, max, cuts) => {
       if (pts.length < 2) return;
       const H = 330, X0 = M + 70, X1 = W - M - 190, Y0 = y + 50, Y1 = y + 50 + H;
-      text(name, M, y + 20, F(30, 1), DARK);
+      breaks.push(y - 30); text(name, M, y + 20, F(30, 1), DARK);
       x.strokeStyle = '#d5dde5'; x.lineWidth = 2; x.beginPath(); x.moveTo(X0, Y0); x.lineTo(X0, Y1); x.lineTo(X1, Y1); x.stroke();
       const yv = val => Y1 - val / max * H;
       cuts.forEach(cu => { x.setLineDash([10, 8]); x.strokeStyle = cu.c; x.beginPath(); x.moveTo(X0, yv(cu.v)); x.lineTo(X1, yv(cu.v)); x.stroke(); x.setLineDash([]);
@@ -619,6 +670,7 @@ async function drawReport(v) {
 
   const out = document.createElement('canvas'); out.width = W; out.height = Math.ceil(y);
   const o = out.getContext('2d'); o.fillStyle = '#fff'; o.fillRect(0, 0, W, out.height); o.drawImage(c, 0, 0);
+  out.breaks = breaks;
   return out;
 }
 
