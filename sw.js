@@ -1,5 +1,5 @@
 // Red primero (para recibir actualizaciones), caché si no hay internet.
-const C = 'ojoseco-v1';
+const C = 'ojoseco-v2';
 const FILES = ['./', 'index.html', 'logo.png', 'manifest.json', 'icon-180.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(C).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener('activate', e => {

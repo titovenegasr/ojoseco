@@ -484,6 +484,15 @@ async function drawReport(v) {
   text(`Edad: ${v.edad} años     Sexo: ${v.sexo === 'F' ? 'Femenino' : 'Masculino'}     Respondió en: ${v.lang === 'en' ? 'inglés' : 'español'}`, M + 30, y + 145, F(28), DARK);
   y += 230;
 
+  // Resultado principal: ¿síntomas compatibles?
+  const meets = (v.deq5 && v.deq5.score >= 6) || (v.osdi && v.osdi.score >= 13);
+  rrect(M, y, CW, 200, 22, meets ? '#e56b1f' : COL.ok);
+  text('Síntomas compatibles con ojo seco:', M + 40, y + 92, F(46, 1), '#fff');
+  text(meets ? 'SÍ' : 'NO', W - M - 50, y + 104, F(92, 1), '#fff', 'right');
+  text(meets ? 'Cumple el criterio de síntomas de TFOS DEWS II (DEQ-5 ≥ 6 u OSDI ≥ 13). Confirmar con al menos un signo clínico.'
+             : 'No cumple el criterio de síntomas de TFOS DEWS II (DEQ-5 ≥ 6 u OSDI ≥ 13).', M + 40, y + 154, F(26), '#fff');
+  y += 250;
+
   // Resumen
   const cards = [];
   if (v.deq5) { const i = deqInterp(v.deq5.score); cards.push({ n: 'DEQ-5', sub: 'Último mes · rango 0–22', s: String(v.deq5.score), i }); }
@@ -501,12 +510,27 @@ async function drawReport(v) {
   y += 300;
   if (v.mode === 'auto' && !v.osdi) { text('OSDI no aplicado: el DEQ-5 dio menos de 6.', M, y, F(28), GRAY); y += 50; }
 
-  // Criterio DEWS II
-  const meets = (v.deq5 && v.deq5.score >= 6) || (v.osdi && v.osdi.score >= 13);
-  const crit = meets ? 'Cumple el criterio de síntomas (TFOS DEWS II: DEQ-5 ≥ 6 u OSDI ≥ 13).' : 'No cumple el criterio de síntomas (TFOS DEWS II: DEQ-5 ≥ 6 u OSDI ≥ 13).';
-  const cl = wrap(crit + (meets ? ' Confirmar con al menos un signo: NIBUT < 10 s, osmolaridad ≥ 308 mOsm/L (o diferencia entre ojos > 8) o tinción de la superficie ocular.' : ''), CW - 60, F(28));
-  rrect(M, y - 10, CW, cl.length * 40 + 40, 16, meets ? '#fff3e8' : '#eef7f1');
-  cl.forEach((l, j) => text(l, M + 30, y + 34 + j * 40, F(28), DARK)); y += cl.length * 40 + 80;
+  // Pruebas clínicas: casillas en blanco para anotar en GoodNotes
+  const box = (X, Y, w, h) => { x.strokeStyle = '#9fb0bf'; x.lineWidth = 2; x.beginPath(); x.roundRect(X, Y, w, h, 10); x.fillStyle = '#fff'; x.fill(); x.stroke(); };
+  y += 50;
+  text('Pruebas clínicas — completar en consulta', M, y, F(36, 1), BLUE); y += 26;
+  const sc = [0.40, 0.26, 0.17, 0.17].map(f => f * CW);
+  rrect(M, y, CW, 60, 10, '#e3ecf4');
+  ['Prueba', 'Positivo si', 'OD', 'OI'].forEach((t, i) => text(t, M + 20 + sc.slice(0, i).reduce((a, b) => a + b, 0), y + 40, F(24, 1), GRAY));
+  y += 60;
+  [['NIBUT (s)', '< 10 s'], ['Osmolaridad (mOsm/L)', '≥ 308 o diferencia > 8'], ['Tinción corneal (fluoresceína)', '> 5 puntos'],
+   ['Tinción conjuntival (verde lisamina)', '> 9 puntos'], ['Tinción del borde palpebral', '≥ 2 mm largo y ≥ 25 % ancho']].forEach(([t, cut], j) => {
+    const h = 96;
+    if (j % 2) { x.fillStyle = '#f7f9fb'; x.fillRect(M, y, CW, h); }
+    text(t, M + 20, y + 58, F(27)); text(cut, M + 20 + sc[0], y + 58, F(25), GRAY);
+    box(M + sc[0] + sc[1] + 10, y + 14, sc[2] - 30, h - 28); box(M + sc[0] + sc[1] + sc[2] + 10, y + 14, sc[3] - 30, h - 28);
+    x.fillStyle = '#e3e9ee'; x.fillRect(M, y + h - 1, CW, 1); y += h;
+  });
+  y += 60;
+  text('Diagnóstico', M, y, F(32, 1), DARK); y += 24;
+  ['Ojo seco (síntomas + al menos un signo positivo)', 'Síntomas sin signos: buscar otra causa (alergia, blefaritis, dolor neuropático…)', 'No cumple la definición de ojo seco']
+    .forEach(t => { x.strokeStyle = DARK; x.lineWidth = 3; x.strokeRect(M + 10, y + 16, 38, 38); text(t, M + 74, y + 47, F(28)); y += 66; });
+  y += 80;
 
   // Tablas de respuestas
   const table = (title, rows) => {
